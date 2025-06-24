@@ -21,7 +21,7 @@ int main(int argc, char *argv[]) {
 
     // Set up Wi-Fi PHY + channel
     YansWifiChannelHelper channel = YansWifiChannelHelper::Default();
-    YansWifiPhyHelper phy = YansWifiPhyHelper::Default();
+    YansWifiPhyHelper phy;
     phy.SetChannel(channel.Create());
 
     WifiHelper wifi;
@@ -70,7 +70,8 @@ int main(int argc, char *argv[]) {
     serverApp.Stop(Seconds(10.0));
 
     for (uint32_t i = 0; i < staNodes.GetN(); ++i) {
-        UdpClientHelper client(interfaces.Get(apNode.GetN()), port);
+        Ipv4Address serverAddress = interfaces.GetAddress(apNode.GetN());
+        UdpClientHelper client(Address(serverAddress), port);
         client.SetAttribute("MaxPackets", UintegerValue(10));
         client.SetAttribute("Interval", TimeValue(MilliSeconds(100 * (i + 1)))); // Staggered sending
         client.SetAttribute("PacketSize", UintegerValue(1024));
