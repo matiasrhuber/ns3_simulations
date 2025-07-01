@@ -4,7 +4,7 @@
 #include "ns3/wifi-module.h"
 #include "ns3/mobility-module.h"
 #include "ns3/applications-module.h"
-#include "ns3-ai-module.h"
+//#include "ns3-ai-module.h"
 
 using namespace ns3;
 
