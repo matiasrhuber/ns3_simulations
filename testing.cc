@@ -77,7 +77,7 @@ int main(int argc, char* argv[])
     {
         channelHelpers[i] = YansWifiChannelHelper::Default();
         phyHelpers[i] = YansWifiPhyHelper();  //::Default()
-        phyHelpers[i].SetChannel(channelHelpers[i].Create());
+        // phyHelpers[i].SetChannel(channelHelpers[i].Create());
         phyHelpers[i].SetChannel(channelHelpers[i].Create());
 
         WifiHelper wifi;
