@@ -5,6 +5,7 @@
 #include "ns3/mobility-module.h"
 #include "ns3/applications-module.h"
 #include "ns3/flow-monitor-module.h"
+#include <ns3/ai-module.h>
 
 // testing ns3 features
 // Node (STA / AP)
