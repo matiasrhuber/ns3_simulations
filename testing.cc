@@ -1,3 +1,4 @@
+#include "ns3/ai-module.h"
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
 #include "ns3/internet-module.h"
@@ -19,26 +20,99 @@ using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("TestingScriptExample");
 
+// // 1) Minimal env that does nothing but is valid
+// Minimal OpenGym env: 1D obs (time), 1D action (ignored), periodic Notify()
+class NoopEnv : public OpenGymEnv {
+public:
+  static TypeId GetTypeId() {
+    static TypeId tid = TypeId("ns3::NoopEnv")
+      .SetParent<OpenGymEnv>()
+      .SetGroupName("OpenGym")
+      .AddConstructor<NoopEnv>()
+      .AddAttribute("StepTime", "Notify interval",
+                    TimeValue(MilliSeconds(200)),
+                    MakeTimeAccessor(&NoopEnv::m_step), MakeTimeChecker());
+    return tid;
+  }
+
+  Ptr<OpenGymSpace> GetObservationSpace() override {
+    // 1 uint64 value
+    return CreateObject<OpenGymBoxSpace>(0.0, 1e15, std::vector<uint32_t>{1}, TypeNameGet<uint64_t>());
+  }
+  Ptr<OpenGymSpace> GetActionSpace() override {
+    // 1 uint32 value
+    return CreateObject<OpenGymBoxSpace>(0.0, 1e6, std::vector<uint32_t>{1}, TypeNameGet<uint32_t>());
+  }
+
+  Ptr<OpenGymDataContainer> GetObservation() override {
+    auto box = CreateObject<OpenGymBoxContainer<uint64_t>>(std::vector<uint32_t>{1});
+    box->AddValue(Simulator::Now().GetMicroSeconds());
+    return box;
+  }
+  float GetReward() override { return 0.0f; }
+  bool GetGameOver() override { return false; }
+  std::string GetExtraInfo() override { return ""; }
+  bool ExecuteActions(Ptr<OpenGymDataContainer>) override { return true; }
+
+  void Start() {
+    Notify(); // first Notify triggers the SimInit handshake for gym.make(...)
+    Simulator::Schedule(m_step, &NoopEnv::Tick, this);
+  }
+private:
+  void Tick() {
+    Notify(); // send obs, receive action
+    Simulator::Schedule(m_step, &NoopEnv::Tick, this);
+  }
+  Time m_step;
+};
+
+
+
+
+
 int main(int argc, char* argv[])
 {
     uint32_t numStas = 5;
     uint32_t numLinks = 3;
     CommandLine cmd;
+    bool genStats = true;
+    bool simLogs = false;
+    double duration = 1000.0;
+    double tcpEnvTimeStep = 0.1;
+    std::string transport_prot = "TcpRlTimeBased";
 
-    cmd.AddValue ("numStas", "Number of station nodes", numStas);
-    cmd.Parse (argc, argv);
+    cmd.AddValue("numStas", "Number of station nodes", numStas);
+    cmd.Parse(argc, argv);
+    // cmd.AddValue("duration", "Time to allow flows to run in seconds", duration);
 
     Time::SetResolution(Time::NS); // smallest time unit
-    LogComponentEnable("UdpClient", LOG_LEVEL_INFO);
-    LogComponentEnable("UdpServer", LOG_LEVEL_INFO);
+    if (simLogs){
+        LogComponentEnable("UdpClient", LOG_LEVEL_INFO);
+        LogComponentEnable("UdpServer", LOG_LEVEL_INFO);
+    }
 
+
+    // Config::SetDefault("ns3::TcpTimeStepEnv::StepTime", TimeValue(Seconds(tcpEnvTimeStep)));
+    // transport_prot = std::string("ns3::") + transport_prot;
+    // Config::SetDefault("ns3::TcpL4Protocol::SocketType",
+    //                 TypeIdValue(TypeId::LookupByName(transport_prot)));
+
+    // // OpenGym Env --- has to be created before any other thing
+    // Ptr<OpenGymInterface> openGymInterface;
+    // openGymInterface = OpenGymInterface::Get();
+    
+    // OpenGym interface + env
+    Ptr<OpenGymInterface> iface = OpenGymInterface::Get();
+    Ptr<NoopEnv> env = CreateObject<NoopEnv>();
+    env->SetOpenGymInterface(iface);
+    env->Start();  // <-- this calls Notify(), which sends SimInitMsg and unblocks Python
 
     // Relevant classes
     NodeContainer apNode;
-    apNode.Create (1);
+    apNode.Create(1);
 
     NodeContainer staNodes;
-    staNodes.Create (numStas);
+    staNodes.Create(numStas);
 
     // Install internet stack on all nodes
     InternetStackHelper internet;
@@ -167,17 +241,38 @@ int main(int argc, char* argv[])
 
     flowMonitor = flowHelper.InstallAll();
 
-    // General Stats
-    std::cout << "Number of STA nodes: " << numStas << std::endl;
-    std::cout << "Number of links: " << numLinks << std::endl;
-    std::cout << "Simulation running with uplink UDP traffic from STAs to AP on port 9." << std::endl;
+    // // Wait for user input before simulation starts
+    // std::cin.get();
 
     Simulator::Stop(Seconds(20.0));
     Simulator::Run();
-    Simulator::Destroy();
+
+
     // Flow monitor results
     flowMonitor->SerializeToXmlFile("flowmon-results.xml", true, true);
+
+
+
+    // General Stats
+    if (genStats){
+        std::cout << "Number of STA nodes: " << numStas << std::endl;
+        std::cout << "Number of links: " << numLinks << std::endl;
+        std::cout << "Simulation running with uplink UDP traffic from STAs to AP on port 9." << std::endl;
+
+        auto printPos = [](Ptr<Node> n, const std::string& name) {
+            Vector p = n->GetObject<MobilityModel>()->GetPosition();
+            std::cout << name << " @ (" << p.x << ", " << p.y << ")\n";
+        };
+
+        printPos(apNode.Get(0), "AP");
+        for (uint32_t i = 0; i < staNodes.GetN(); ++i) {
+            printPos(staNodes.Get(i), "STA" + std::to_string(i));
+        }
+    }
+    
+    iface->NotifySimulationEnd();
     Simulator::Destroy();
+
 
     return 0;
 
