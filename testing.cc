@@ -22,47 +22,99 @@ NS_LOG_COMPONENT_DEFINE("TestingScriptExample");
 
 // // 1) Minimal env that does nothing but is valid
 // Minimal OpenGym env: 1D obs (time), 1D action (ignored), periodic Notify()
-class NoopEnv : public OpenGymEnv {
+class MloEnv : public OpenGymEnv {
 public:
   static TypeId GetTypeId() {
-    static TypeId tid = TypeId("ns3::NoopEnv")
+    static TypeId tid = TypeId("ns3::MloEnv")
       .SetParent<OpenGymEnv>()
       .SetGroupName("OpenGym")
-      .AddConstructor<NoopEnv>()
+      .AddConstructor<MloEnv>()
       .AddAttribute("StepTime", "Notify interval",
                     TimeValue(MilliSeconds(200)),
-                    MakeTimeAccessor(&NoopEnv::m_step), MakeTimeChecker());
+                    MakeTimeAccessor(&MloEnv::m_step), 
+                    MakeTimeChecker());
     return tid;
   }
 
-  Ptr<OpenGymSpace> GetObservationSpace() override {
-    // 1 uint64 value
-    return CreateObject<OpenGymBoxSpace>(0.0, 1e15, std::vector<uint32_t>{1}, TypeNameGet<uint64_t>());
-  }
-  Ptr<OpenGymSpace> GetActionSpace() override {
-    // 1 uint32 value
-    return CreateObject<OpenGymBoxSpace>(0.0, 1e6, std::vector<uint32_t>{1}, TypeNameGet<uint32_t>());
+  // wire pointers (keep it dead simple)
+  void Wire(NodeContainer* staNodes, Ptr<Node> ap, uint32_t numStas, uint32_t numLinks) {
+    m_staNodes  = staNodes;
+    m_ap        = ap;
+    m_numStas   = numStas;
+    m_numLinks  = numLinks;
+    m_assignment.resize(m_numStas, 0); // default all to link 0
   }
 
+  // ---- Spaces ----
+  Ptr<OpenGymSpace> GetObservationSpace() override {
+    // distances: double[numStas]
+    return CreateObject<OpenGymBoxSpace>(
+      /*low*/  0.0,
+      /*high*/ 1e6,                                  // meters upper bound (big enough)
+      std::vector<uint32_t>{m_numStas},
+      TypeNameGet<double>());
+  }
+
+
+  Ptr<OpenGymSpace> GetActionSpace() override {
+    // per-STA link index: uint32[numStas] in [0, numLinks-1]
+    return CreateObject<OpenGymBoxSpace>(
+      /*low*/  0.0,
+      /*high*/ static_cast<double>(m_numLinks - 1),
+      std::vector<uint32_t>{m_numStas},
+      TypeNameGet<uint32_t>());
+  }
+
+  // ---- Data exchange ----
   Ptr<OpenGymDataContainer> GetObservation() override {
-    auto box = CreateObject<OpenGymBoxContainer<uint64_t>>(std::vector<uint32_t>{1});
-    box->AddValue(Simulator::Now().GetMicroSeconds());
+    auto box = CreateObject<OpenGymBoxContainer<double>>(std::vector<uint32_t>{m_numStas});
+    // AP position (single AP in your script)
+    Vector apPos = m_ap->GetObject<MobilityModel>()->GetPosition();
+    for (uint32_t i = 0; i < m_numStas; ++i) {
+      Vector staPos = m_staNodes->Get(i)->GetObject<MobilityModel>()->GetPosition();
+      double d = CalculateDistance(staPos, apPos);   // meters
+      box->AddValue(d);
+    }
     return box;
   }
+
+
   float GetReward() override { return 0.0f; }
-  bool GetGameOver() override { return false; }
+  bool  GetGameOver() override { return false; }
   std::string GetExtraInfo() override { return ""; }
-  bool ExecuteActions(Ptr<OpenGymDataContainer>) override { return true; }
+
+  bool ExecuteActions(Ptr<OpenGymDataContainer> action) override {
+    // Expect uint32[numStas] link IDs
+    auto box = DynamicCast<OpenGymBoxContainer<uint32_t>>(action);
+    if (!box) return false;
+
+    for (uint32_t i = 0; i < m_numStas; ++i) {
+      uint32_t linkId = box->GetValue(i);
+      if (linkId >= m_numLinks) linkId = m_numLinks - 1;  // clamp just in case
+      m_assignment[i] = linkId;
+    }
+    // TODO: apply m_assignment to your Wi-Fi link selection logic, if/when you want
+    return true;
+  }
 
   void Start() {
-    Notify(); // first Notify triggers the SimInit handshake for gym.make(...)
-    Simulator::Schedule(m_step, &NoopEnv::Tick, this);
+    Notify(); // triggers SimInit handshake
+    Simulator::Schedule(m_step, &MloEnv::Tick, this);
   }
 private:
   void Tick() {
-    Notify(); // send obs, receive action
-    Simulator::Schedule(m_step, &NoopEnv::Tick, this);
+    Notify(); // push obs, receive action
+    Simulator::Schedule(m_step, &MloEnv::Tick, this);
   }
+
+  // wired-in context
+  NodeContainer* m_staNodes = nullptr;
+  Ptr<Node>      m_ap;
+  uint32_t       m_numStas = 0;
+  uint32_t       m_numLinks = 0;
+
+  // state
+  std::vector<uint32_t> m_assignment; // per-STA chosen link
   Time m_step;
 };
 
@@ -101,11 +153,6 @@ int main(int argc, char* argv[])
     // Ptr<OpenGymInterface> openGymInterface;
     // openGymInterface = OpenGymInterface::Get();
     
-    // OpenGym interface + env
-    Ptr<OpenGymInterface> iface = OpenGymInterface::Get();
-    Ptr<NoopEnv> env = CreateObject<NoopEnv>();
-    env->SetOpenGymInterface(iface);
-    env->Start();  // <-- this calls Notify(), which sends SimInitMsg and unblocks Python
 
     // Relevant classes
     NodeContainer apNode;
@@ -131,6 +178,14 @@ int main(int argc, char* argv[])
     mobility.SetMobilityModel("ns3::ConstantPositionMobilityModel");
     mobility.Install(apNode);
     mobility.Install(staNodes);
+    
+    // OpenGym interface + env
+    Ptr<OpenGymInterface> iface = OpenGymInterface::Get();
+
+    Ptr<MloEnv> env = CreateObject<MloEnv>();
+    env->Wire(&staNodes, apNode.Get(0), numStas, numLinks);
+    env->SetOpenGymInterface(iface);
+    env->Start();  // <-- this calls Notify(), which sends SimInitMsg and unblocks Python
 
     // YANS wifi simulation: Combines large-scale path loss 
     // with small-scale fading effects, giving a more realistic 
