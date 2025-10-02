@@ -40,7 +40,6 @@ class RoundRobinAgent:
         return action.astype(np.uint32)
     
 
-print('here1')
 ns3_settings = {
     'duration':1000,
 }
@@ -48,7 +47,9 @@ env = gym.make("ns3ai_gym_env/Ns3-v0",
                targetName="scratch/ns3_simulations/testing", 
                ns3Path="/home/lifistudmlo/ns-3-allinone/ns-3.44",
                ) #ns3Settings=ns3_settings
-print('here2')
+
+action_log = False
+
 ob_space = env.observation_space
 ac_space = env.action_space
 print("Observation space: ", ob_space, ob_space.dtype)
@@ -65,14 +66,17 @@ try:
     while True:
 
         action = agent.get_action(obs)
-        print(f"Step {step_idx}: action = {action}")
+        if (action_log):
+            print(f"Step {step_idx}: action = {action}")
 
         obs, reward, done, _, info = env.step(action)
+
+        print(f"Step {step_idx}: obs = {obs}")
 
         if done:
             print("Simulation Ended")
             break
-        
+
         step_idx += 1
 
 except Exception as e:
